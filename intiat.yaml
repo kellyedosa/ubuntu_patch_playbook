@@ -1,0 +1,41 @@
+# ============================================================
+# Ansible Inventory: 20 Ubuntu Servers
+# ============================================================
+# Replace the IPs/hostnames and credential values below with
+# your actual server details.
+#
+# Tip: For production, store ansible_ssh_private_key_file
+#      and ansible_user in group_vars/ or use ansible-vault
+#      to protect ansible_ssh_pass.
+# ============================================================
+
+[ubuntu_servers]
+# Format: <alias>  ansible_host=<IP or FQDN>  [optional per-host overrides]
+
+ubuntu-01  ansible_host=192.168.1.101
+ubuntu-02  ansible_host=192.168.1.102
+ubuntu-03  ansible_host=192.168.1.103
+ubuntu-04  ansible_host=192.168.1.104
+ubuntu-05  ansible_host=192.168.1.105
+ubuntu-06  ansible_host=192.168.1.106
+ubuntu-07  ansible_host=192.168.1.107
+ubuntu-08  ansible_host=192.168.1.108
+ubuntu-09  ansible_host=192.168.1.109
+ubuntu-10  ansible_host=192.168.1.110
+ubuntu-11  ansible_host=192.168.1.111
+ubuntu-12  ansible_host=192.168.1.112
+ubuntu-13  ansible_host=192.168.1.113
+ubuntu-14  ansible_host=192.168.1.114
+ubuntu-15  ansible_host=192.168.1.115
+ubuntu-16  ansible_host=192.168.1.116
+ubuntu-17  ansible_host=192.168.1.117
+ubuntu-18  ansible_host=192.168.1.118
+ubuntu-19  ansible_host=192.168.1.119
+ubuntu-20  ansible_host=192.168.1.120
+
+# ── Group-level connection defaults ──────────────────────────
+[ubuntu_servers:vars]
+ansible_user=ubuntu                          # SSH user (sudo-capable)
+ansible_ssh_private_key_file=~/.ssh/id_rsa  # Path to your private key
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o ConnectTimeout=30'
