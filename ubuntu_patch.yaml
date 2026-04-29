@@ -1,0 +1,166 @@
+---
+# ============================================================
+# Ansible Playbook: Serial Ubuntu Patching (One at a Time)
+# ============================================================
+# Patches each Ubuntu server one-by-one:
+#   1. Apply apt updates
+#   2. Reboot if required
+#   3. Wait for the server to come back online
+#   4. Verify it is healthy before moving to the next host
+#
+# Usage:
+#   ansible-playbook patch_ubuntu_serial.yml -i inventory.ini
+#
+# Optional extra vars:
+#   --extra-vars "reboot_timeout=600 update_cache_valid_time=3600"
+# ============================================================
+
+- name: Serial Ubuntu Patching - One Host at a Time
+  hosts: webservers
+  serial: 1                        # Process exactly ONE host at a time
+  become: true                     # sudo required for patching
+  gather_facts: true
+
+  vars:
+    reboot_timeout: 600            # Max seconds to wait for reboot (10 min)
+    pre_reboot_delay: 5            # Seconds to wait before rebooting
+    post_reboot_delay: 30          # Seconds to wait after reboot before checks
+    update_cache_valid_time: 3600  # Seconds before apt cache is considered stale
+    upgrade_type: full             # Options: safe | full | dist
+    autoremove: true               # Remove unneeded packages after patching
+    autoclean: true                # Clean apt cache after patching
+
+  # ── Pre-patch checks ──────────────────────────────────────
+  pre_tasks:
+
+    - name: "[ PRE ] Display host being patched"
+      ansible.builtin.debug:
+        msg: >-
+          ============================================================
+          Starting patch for: {{ inventory_hostname }}
+          OS       : {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Kernel   : {{ ansible_kernel }}
+          ============================================================
+
+    - name: "[ PRE ] Record current kernel version"
+      ansible.builtin.set_fact:
+        kernel_before: "{{ ansible_kernel }}"
+
+    - name: "[ PRE ] Update apt cache"
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: "{{ update_cache_valid_time }}"
+
+    - name: "[ PRE ] List packages with pending upgrades"
+      ansible.builtin.shell: |
+        apt list --upgradable 2>/dev/null | grep -v "Listing..." || true
+      register: pending_upgrades
+      changed_when: false
+
+    - name: "[ PRE ] Show pending upgrades"
+      ansible.builtin.debug:
+        msg: "{{ pending_upgrades.stdout_lines }}"
+      when: pending_upgrades.stdout_lines | length > 0
+
+    - name: "[ PRE ] No upgrades pending"
+      ansible.builtin.debug:
+        msg: "All packages are up to date. No patching needed."
+      when: pending_upgrades.stdout_lines | length == 0
+
+  # ── Patching tasks ────────────────────────────────────────
+  tasks:
+
+    - name: "[ PATCH ] Perform {{ upgrade_type }} upgrade"
+      ansible.builtin.apt:
+        upgrade: "{{ upgrade_type }}"
+        autoremove: "{{ autoremove }}"
+        autoclean: "{{ autoclean }}"
+      register: apt_upgrade_result
+
+    - name: "[ PATCH ] Show upgrade result summary"
+      ansible.builtin.debug:
+        msg: >-
+          Upgrade complete on {{ inventory_hostname }}.
+          Changed: {{ apt_upgrade_result.changed }}
+
+    # ── Reboot handling ──────────────────────────────────────
+
+    - name: "[ REBOOT ] Check if reboot is required"
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    - name: "[ REBOOT ] Reboot is required — initiating"
+      ansible.builtin.reboot:
+        msg: "Rebooting {{ inventory_hostname }} for kernel/package updates"
+        pre_reboot_delay: "{{ pre_reboot_delay }}"
+        post_reboot_delay: "{{ post_reboot_delay }}"
+        reboot_timeout: "{{ reboot_timeout }}"
+        connect_timeout: 20
+        test_command: uptime
+      when: reboot_required_file.stat.exists
+
+    - name: "[ REBOOT ] No reboot required"
+      ansible.builtin.debug:
+        msg: "No reboot needed on {{ inventory_hostname }}."
+      when: not reboot_required_file.stat.exists
+
+    # ── Post-reboot verification ─────────────────────────────
+
+    - name: "[ VERIFY ] Wait for SSH to be available"
+      ansible.builtin.wait_for_connection:
+        delay: 10
+        timeout: "{{ reboot_timeout }}"
+
+    - name: "[ VERIFY ] Re-gather facts after reboot"
+      ansible.builtin.setup:
+
+    - name: "[ VERIFY ] Confirm host is reachable (ping)"
+      ansible.builtin.ping:
+
+    - name: "[ VERIFY ] Check critical services are running"
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - ssh
+        - cron
+        - rsyslog
+      ignore_errors: true          # Non-fatal; adjust list to your environment
+      register: service_check
+
+    - name: "[ VERIFY ] Report service status"
+      ansible.builtin.debug:
+        msg: "Service {{ item.item }}: {{ 'OK' if item.state is defined and item.state == 'started' else 'CHECK MANUALLY' }}"
+      loop: "{{ service_check.results }}"
+
+    - name: "[ VERIFY ] Show kernel versions (before vs after)"
+      ansible.builtin.debug:
+        msg: >-
+          Kernel before : {{ kernel_before }}
+          Kernel after  : {{ ansible_kernel }}
+          {{ '*** Kernel updated ***' if kernel_before != ansible_kernel else '(no kernel change)' }}
+
+    - name: "[ VERIFY ] Check for any remaining upgrades"
+      ansible.builtin.shell: |
+        apt list --upgradable 2>/dev/null | grep -v "Listing..." | wc -l
+      register: remaining_upgrades
+      changed_when: false
+
+    - name: "[ VERIFY ] Remaining upgrades count"
+      ansible.builtin.debug:
+        msg: "Remaining upgradable packages: {{ remaining_upgrades.stdout | trim }}"
+
+  # ── Post-patch summary ────────────────────────────────────
+  post_tasks:
+
+    - name: "[ DONE ] Patching complete for {{ inventory_hostname }}"
+      ansible.builtin.debug:
+        msg: >-
+          ============================================================
+          DONE: {{ inventory_hostname }}
+          Uptime    : {{ ansible_uptime_seconds | int // 3600 }}h
+                      {{ (ansible_uptime_seconds | int % 3600) // 60 }}m
+          Kernel    : {{ ansible_kernel }}
+          Remaining : {{ remaining_upgrades.stdout | trim }} package(s) pending
+          ============================================================
